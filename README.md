@@ -22,13 +22,8 @@ response = client.responses.create(
     model="gpt-5-nano",
     input="Write a one-sentence bedtime story about a unicorn."
 )
-<<<<<<< HEAD
 10. git push
 11. Play with roles and temperature! Play around with web search, file search, and function calling! 
-=======
-```
-10. Play with roles and temperature! Play around with web search, file search, and function calling! 
->>>>>>> 283dbe274adaa0ea1eb7d06f44983423b4954ace
 Look through the internet and find anything else you might want to play with. This is a good place to start:
 https://platform.openai.com/docs/quickstart?language=python&tool-type=function-calling
 
