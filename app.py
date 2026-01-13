@@ -8,6 +8,18 @@ load_dotenv()
 app = Flask(__name__, static_folder="public", static_url_path="")
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+SYSTEM_PROMPT = {
+    "role": "system",
+    "content": (
+        "You are an expert on all things related to the state of California. "
+        "You have deep knowledge of California history, geography, politics, "
+        "law, culture, climate, universities, technology, and local customs. "
+        "When answering questions, prioritize California-specific context, "
+        "examples, and accuracy."
+    )
+}
+
+
 @app.get("/")
 def index():
     return send_from_directory("public", "index.html")
@@ -15,13 +27,19 @@ def index():
 @app.post("/api/chat")
 def chat():
     data = request.get_json(silent=True) or {}
-    message = data.get("message", "")
-    if not isinstance(message, str) or not message.strip():
-        return jsonify({"error": "Missing 'message' string."}), 400
+    history = data.get("history", [])
+    if not isinstance(history, list):
+        return jsonify({"error": "Invalid history."}), 400
+
+    # Remove any client-provided system messages (optional but safer)
+    history = [m for m in history if m.get("role") != "system"]
+
+    # Inject our system prompt at the front
+    full_history = [SYSTEM_PROMPT] + history[-30:]
 
     resp = client.responses.create(
         model="gpt-5-nano",
-        input=message
+        input=full_history
     )
     return jsonify({"text": resp.output_text})
 
