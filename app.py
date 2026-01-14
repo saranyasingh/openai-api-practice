@@ -8,6 +8,11 @@ load_dotenv()
 app = Flask(__name__, static_folder="public", static_url_path="")
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+# Supabase (use service role on backend)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
 SYSTEM_PROMPT = {
     "role": "system",
     "content": (
@@ -18,6 +23,22 @@ SYSTEM_PROMPT = {
         "examples, and accuracy."
     )
 }
+
+def embed_query(text: str) -> list[float]:
+    """
+    Generate an embedding for a user query using OpenAI.
+    Returns a list of floats (the embedding vector).
+    """
+    if not text or not isinstance(text, str):
+        raise ValueError("Text to embed must be a non-empty string")
+
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+
+    return response.data[0].embedding
+
 
 
 @app.get("/")
@@ -30,6 +51,19 @@ def chat():
     history = data.get("history", [])
     if not isinstance(history, list):
         return jsonify({"error": "Invalid history."}), 400
+    
+    # Get the latest user message
+    user_message = next(
+        (m["content"] for m in reversed(history) if m.get("role") == "user"),
+        None,
+    )
+    if not user_message:
+        return jsonify({"error": "No user message found"}), 400
+
+    # 🔹 Embed the user query
+    query_embedding = embed_query(user_message)
+
+
 
     # Remove any client-provided system messages (optional but safer)
     history = [m for m in history if m.get("role") != "system"]
