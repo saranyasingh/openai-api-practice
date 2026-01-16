@@ -3,9 +3,6 @@ const form = document.getElementById("form");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 
-// This is what we send to the backend each time:
-const history = [];
-
 function addMessage(text, who) {
   const div = document.createElement("div");
   div.className = `msg ${who}`;
@@ -20,7 +17,6 @@ async function sendMessage(message) {
   input.disabled = true;
 
   addMessage(message, "user");
-  history.push({ role: "user", content: message });
 
   const thinking = addMessage("…", "bot");
 
@@ -28,7 +24,7 @@ async function sendMessage(message) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ history }),
+      body: JSON.stringify({ message }),
     });
 
     const data = await res.json();
@@ -36,7 +32,6 @@ async function sendMessage(message) {
 
     const botText = data.text || "(no response)";
     thinking.textContent = botText;
-    history.push({ role: "assistant", content: botText });
   } catch (err) {
     thinking.textContent = `Error: ${err.message}`;
   } finally {
@@ -57,4 +52,3 @@ form.addEventListener("submit", (e) => {
 // Optional: greet AND include it in history so the bot “remembers” it.
 const greeting = "Hi! Ask me anything.";
 addMessage(greeting, "bot");
-history.push({ role: "assistant", content: greeting });

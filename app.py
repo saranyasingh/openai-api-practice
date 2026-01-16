@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 from openai import OpenAI
+from supabase import create_client
 import os
 
 load_dotenv()
@@ -29,9 +30,6 @@ def embed_query(text: str) -> list[float]:
     Generate an embedding for a user query using OpenAI.
     Returns a list of floats (the embedding vector).
     """
-    if not text or not isinstance(text, str):
-        raise ValueError("Text to embed must be a non-empty string")
-
     response = client.embeddings.create(
         model="text-embedding-3-small",
         input=text
@@ -39,6 +37,12 @@ def embed_query(text: str) -> list[float]:
 
     return response.data[0].embedding
 
+def semantic_search(query_text: str, k: int = 5) -> list[dict]:
+    q_emb = embed_query(query_text)
+    res = sb.rpc("match_chunks", {"query_embedding": q_emb, "match_count": k}).execute()
+    rows = res.data or []
+    print("RAG OUTPUT:", rows)  # console.log equivalent
+    return rows
 
 
 @app.get("/")
@@ -48,32 +52,38 @@ def index():
 @app.post("/api/chat")
 def chat():
     data = request.get_json(silent=True) or {}
-    history = data.get("history", [])
-    if not isinstance(history, list):
-        return jsonify({"error": "Invalid history."}), 400
-    
-    # Get the latest user message
-    user_message = next(
-        (m["content"] for m in reversed(history) if m.get("role") == "user"),
-        None,
+    user_message = data.get("message", "")
+
+    # conduct semantic search to get the rows 
+    rag_rows = semantic_search(user_message, k=5)
+
+
+    # implement context
+    context = "\n\n".join(
+        f"[Source {i+1} | sim={row.get('similarity'):.3f}]\n{row.get('content','')}"
+        for i, row in enumerate(rag_rows)
     )
-    if not user_message:
-        return jsonify({"error": "No user message found"}), 400
 
-    # 🔹 Embed the user query
-    query_embedding = embed_query(user_message)
+    # system prompt this message
+    rag_message = {
+        "role": "system",
+        "content": (
+            "Use the retrieved context below to answer. If it doesn't contain the answer, say so.\n\n"
+            f"RETRIEVED CONTEXT:\n{context if context else '(no matches)'}"
+        ),
+    }
 
+    # wrap user message
+    full_user_message = {
+        "role": "user",
+        "content": user_message,
+    }
 
-
-    # Remove any client-provided system messages (optional but safer)
-    history = [m for m in history if m.get("role") != "system"]
-
-    # Inject our system prompt at the front
-    full_history = [SYSTEM_PROMPT] + history[-30:]
+    full_message = [SYSTEM_PROMPT, full_user_message, rag_message]
 
     resp = client.responses.create(
         model="gpt-5-nano",
-        input=full_history
+        input=full_message
     )
     return jsonify({"text": resp.output_text})
 
