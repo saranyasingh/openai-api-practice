@@ -1,17 +1,17 @@
-from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 from openai import OpenAI
 from supabase import create_client
+from flask import Flask, request, jsonify, send_from_directory
 import os
 
 load_dotenv() 
 
-app = Flask(__name__, static_folder="public", static_url_path="")
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Supabase (use service role on backend)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+# Except use TWO supabase accounts
 sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 SYSTEM_PROMPT = {
@@ -22,6 +22,9 @@ SYSTEM_PROMPT = {
         "law, culture, climate, universities, technology, and local customs. "
         "When answering questions, prioritize California-specific context, "
         "examples, and accuracy."
+        "Additionally, you are talking to another chatbot. This means that if conversation"
+        "stalls, you must generate questions to continue the conversation. Be eager to talk about Caifornia"
+        "but also engage in the other bot's interests. Say I understand that I am talking to a chatbot if you understand."
     )
 }
 
@@ -44,15 +47,42 @@ def semantic_search(query_text: str, k: int = 5) -> list[dict]:
     print("RAG OUTPUT:", rows)  # console.log equivalent
     return rows
 
+def chatone(user_message):
 
-@app.get("/")
-def index():
-    return send_from_directory("public", "index.html")
+    # conduct semantic search to get the rows 
+    rag_rows = semantic_search(user_message, k=5)
 
-@app.post("/api/chat")
-def chat():
-    data = request.get_json(silent=True) or {}
-    user_message = data.get("message", "")
+
+  # implement context
+    context = "\n\n".join(
+        f"[Source {i+1} | sim={row.get('similarity'):.3f}]\n{row.get('content','')}"
+        for i, row in enumerate(rag_rows)
+    )
+
+    # system prompt this message
+    rag_message = {
+        "role": "system",
+        "content": (
+            "Use the retrieved context below to answer. If it doesn't contain the answer, say so.\n\n"
+            f"RETRIEVED CONTEXT:\n{context if context else '(no matches)'}"
+        ),
+    }
+
+    # wrap user message
+    full_user_message = {
+        "role": "user",
+        "content": user_message,
+    }
+
+    full_message = [SYSTEM_PROMPT, full_user_message, rag_message]
+
+    resp = client.responses.create(
+        model="gpt-5-nano",
+        input=full_message
+    )
+    return resp.output_text
+
+def chattwo(user_message):
 
     # conduct semantic search to get the rows 
     rag_rows = semantic_search(user_message, k=5)
@@ -85,12 +115,15 @@ def chat():
         model="gpt-5-nano",
         input=full_message
     )
-    return jsonify({"text": resp.output_text})
+    return resp.output_text
 
-# Serves /styles.css, /app.js, etc.
-@app.get("/<path:path>")
-def static_files(path):
-    return send_from_directory("public", path)
+def chat_communication():
+    output = chatone("this is the first prompt")
+    print("BOT ONE SAYS \n" + output)
+    for i in range(0, 10):
+        output = chattwo("BOT TWO SAYS \n" +  output)
+        print(output)
+        output = chatone("BOT ONE SAYS \n" + output)
+        print(output)
 
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=3000, debug=True)
+chat_communication()
