@@ -1,18 +1,23 @@
 from dotenv import load_dotenv
 from openai import OpenAI
 from supabase import create_client
-from flask import Flask, request, jsonify, send_from_directory
 import os
+from collections import deque
 
-load_dotenv() 
+load_dotenv()
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# Keep history bounded so you don't blow context/tokens
+MAX_TURNS = 20  # each "turn" is one message; 20 means up to 20 messages stored
+CHAT_ONE_HISTORY = deque(maxlen=MAX_TURNS)
+CHAT_TWO_HISTORY = deque(maxlen=MAX_TURNS)
 
 # Supabase (use service role on backend)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-# Except use TWO supabase accounts
-sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+sb1 = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+sb2 = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 SYSTEM_PROMPT = {
     "role": "system",
@@ -21,46 +26,37 @@ SYSTEM_PROMPT = {
         "You have deep knowledge of California history, geography, politics, "
         "law, culture, climate, universities, technology, and local customs. "
         "When answering questions, prioritize California-specific context, "
-        "examples, and accuracy."
-        "Additionally, you are talking to another chatbot. This means that if conversation"
-        "stalls, you must generate questions to continue the conversation. Be eager to talk about Caifornia"
-        "but also engage in the other bot's interests. Say I understand that I am talking to a chatbot if you understand."
+        "examples, and accuracy. "
+        "Additionally, you are talking to another chatbot. This means that if conversation "
+        "stalls, you must generate questions to continue the conversation. Be eager to talk about California "
+        "but also engage in the other bot's interests. Always repeat the question you are asked."
+
     )
 }
 
 def embed_query(text: str) -> list[float]:
-    """
-    Generate an embedding for a user query using OpenAI.
-    Returns a list of floats (the embedding vector).
-    """
     response = client.embeddings.create(
         model="text-embedding-3-small",
         input=text
     )
-
     return response.data[0].embedding
 
-def semantic_search(query_text: str, k: int = 5) -> list[dict]:
+def semantic_search(query_text: str, sb_client, k: int = 5) -> list[dict]:
     q_emb = embed_query(query_text)
-    res = sb.rpc("match_chunks", {"query_embedding": q_emb, "match_count": k}).execute()
+    res = sb_client.rpc("match_chunks", {"query_embedding": q_emb, "match_count": k}).execute()
     rows = res.data or []
-    print("RAG OUTPUT:", rows)  # console.log equivalent
+    print("RAG OUTPUT:", rows)
     return rows
 
-def chatone(user_message):
+def build_rag_message(user_message, sb_client) -> dict:
+    rag_rows = semantic_search(user_message, sb_client, k=5)
 
-    # conduct semantic search to get the rows 
-    rag_rows = semantic_search(user_message, k=5)
-
-
-  # implement context
     context = "\n\n".join(
         f"[Source {i+1} | sim={row.get('similarity'):.3f}]\n{row.get('content','')}"
         for i, row in enumerate(rag_rows)
     )
 
-    # system prompt this message
-    rag_message = {
+    return {
         "role": "system",
         "content": (
             "Use the retrieved context below to answer. If it doesn't contain the answer, say so.\n\n"
@@ -68,62 +64,46 @@ def chatone(user_message):
         ),
     }
 
-    # wrap user message
-    full_user_message = {
-        "role": "user",
-        "content": user_message,
-    }
+def run_bot(user_message, history, sb_client) -> str:
+    # RAG should be based on the latest message (simple + works well)
+    rag_message = build_rag_message(user_message, sb_client)
 
-    full_message = [SYSTEM_PROMPT, full_user_message, rag_message]
+    user_msg = {"role": "user", "content": user_message}
 
-    resp = client.responses.create(
-        model="gpt-5-nano",
-        input=full_message
-    )
-    return resp.output_text
-
-def chattwo(user_message):
-
-    # conduct semantic search to get the rows 
-    rag_rows = semantic_search(user_message, k=5)
-
-
-    # implement context
-    context = "\n\n".join(
-        f"[Source {i+1} | sim={row.get('similarity'):.3f}]\n{row.get('content','')}"
-        for i, row in enumerate(rag_rows)
-    )
-
-    # system prompt this message
-    rag_message = {
-        "role": "system",
-        "content": (
-            "Use the retrieved context below to answer. If it doesn't contain the answer, say so.\n\n"
-            f"RETRIEVED CONTEXT:\n{context if context else '(no matches)'}"
-        ),
-    }
-
-    # wrap user message
-    full_user_message = {
-        "role": "user",
-        "content": user_message,
-    }
-
-    full_message = [SYSTEM_PROMPT, full_user_message, rag_message]
+    messages = [
+        SYSTEM_PROMPT,
+        *list(history),
+        rag_message,
+        user_msg    # latest user input
+    ]
 
     resp = client.responses.create(
         model="gpt-5-nano",
-        input=full_message
+        input=messages
     )
-    return resp.output_text
+    assistant_text = resp.output_text
+
+    # Save turns to that bot's local history
+    history.append(user_msg)
+    history.append({"role": "assistant", "content": assistant_text})
+
+    return assistant_text
+
+def chatone(user_message: str) -> str:
+    return run_bot(user_message, CHAT_ONE_HISTORY, sb1)
+
+def chattwo(user_message: str) -> str:
+    return run_bot(user_message, CHAT_TWO_HISTORY, sb2)
 
 def chat_communication():
-    output = chatone("this is the first prompt")
-    print("BOT ONE SAYS \n" + output)
-    for i in range(0, 10):
-        output = chattwo("BOT TWO SAYS \n" +  output)
-        print(output)
-        output = chatone("BOT ONE SAYS \n" + output)
-        print(output)
+    output = chatone("Tell me about a fun fact, then ask a question to the other chatbot related to the fun fact to get started.")
+    print("BOT ONE SAYS:\n" + output + "\n")
+
+    for _ in range(10):
+        output = chattwo("Respond directly to the question in the message below.\n\n" + output)
+        print("BOT TWO SAYS:\n" + output + "\n")
+
+        output = chatone("Respond directly to the question in the message below.\n\n" + output)
+        print("BOT ONE SAYS:\n" + output + "\n")
 
 chat_communication()

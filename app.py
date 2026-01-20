@@ -4,6 +4,7 @@ from openai import OpenAI
 from supabase import create_client
 import os
 
+
 load_dotenv() 
 
 app = Flask(__name__, static_folder="public", static_url_path="")
@@ -13,6 +14,7 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
 
 SYSTEM_PROMPT = {
     "role": "system",
@@ -52,6 +54,7 @@ def index():
 @app.post("/api/chat")
 def chat():
     data = request.get_json(silent=True) or {}
+    print(data)
     user_message = data.get("message", "")
 
     # conduct semantic search to get the rows 
