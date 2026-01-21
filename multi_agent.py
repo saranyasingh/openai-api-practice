@@ -7,6 +7,7 @@ from collections import deque
 load_dotenv()
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+print(os.environ.get("OPENAI_API_KEY"))
 
 # Keep history bounded so you don't blow context/tokens
 MAX_TURNS = 20  # each "turn" is one message; 20 means up to 20 messages stored
@@ -30,6 +31,8 @@ SYSTEM_PROMPT = {
         "Additionally, you are talking to another chatbot. This means that if conversation "
         "stalls, you must generate questions to continue the conversation. Be eager to talk about California "
         "but also engage in the other bot's interests. Always repeat the question you are asked."
+        "I will also pass in a chat history, just for context. This is NOT the question you are being asked, "
+        "it is just context from previous conversations."
 
     )
 }
@@ -83,9 +86,10 @@ def run_bot(user_message, history, sb_client) -> str:
     )
     assistant_text = resp.output_text
 
+
     # Save turns to that bot's local history
-    history.append(user_msg)
-    history.append({"role": "assistant", "content": assistant_text})
+    history.append({"role": "user", "content": "This is history of previous user messages" + user_message})
+    history.append({"role": "assistant", "content": "This is history of your previous answers" + assistant_text})
 
     return assistant_text
 
